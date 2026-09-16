@@ -26,7 +26,6 @@ const bot2YT = createYouTubeClient(
   process.env.BOT2_REFRESH_TOKEN
 );
 
-// Canlı Yayın veya Bekleme Ekranı Sohbet ID Alıcı
 async function getLiveChatId(youtubeClient) {
   const response = await youtubeClient.videos.list({
     part: 'liveStreamingDetails',
@@ -35,12 +34,11 @@ async function getLiveChatId(youtubeClient) {
   
   const details = response.data.items?.[0]?.liveStreamingDetails;
   if (!details || !details.activeLiveChatId) {
-    throw new Error('Sohbet ID alınamadı. Sohbet henüz aktif değil.');
+    throw new Error('Sohbet ID alınamadı.');
   }
   return details.activeLiveChatId;
 }
 
-// Sohbetteki Son Mesajları Okuma
 async function getRecentChatMessages(youtubeClient, liveChatId) {
   try {
     const res = await youtubeClient.liveChatMessages.list({
@@ -55,10 +53,19 @@ async function getRecentChatMessages(youtubeClient, liveChatId) {
   }
 }
 
-// AI Mesaj Üretici (openai/gpt-oss-20b Modeli)
-async function generateBotMessage(personaPrompt, chatContext = '') {
-  const systemContent = `${personaPrompt} Kesinlikle noktalama işareti kullanma. Bol emoji kullan. Kısa ve doğal bir YouTube yayın sohbeti mesajı yaz.`;
-  const userContent = chatContext ? `Sohbetteki son mesajlar şunlar:\n${chatContext}\nBu mesajlara uygun bir cevap yaz:` : 'Sohbete yeni bir mesaj yaz:';
+// Tam Ayarlanmış Sistem Prompt'u
+async function generateBotMessage(systemPrompt, userRolePrompt, chatContext = '') {
+  const systemContent = `${systemPrompt} 
+KESİN KURALLAR:
+1. Kesinlikle noktalama işareti kullanma (nokta, virgül, ünlem YASAK).
+2. Bol bol emoji kullan.
+3. Asla başkasını veya diğer botları @ ile etiketleme!
+4. Başka izleyicilere teşekkür edip yayıncı gibi davranma, sen sadece sohbeti izleyen birisin.
+5. Sohbet geçmişindeki mesajların kelimelerini aynen tekrarlama.`;
+
+  const userContent = chatContext 
+    ? `Sohbetteki son mesajlar şunlar:\n${chatContext}\n\n${userRolePrompt}` 
+    : userRolePrompt;
 
   const completion = await groq.chat.completions.create({
     messages: [
@@ -68,10 +75,9 @@ async function generateBotMessage(personaPrompt, chatContext = '') {
     model: 'openai/gpt-oss-20b',
   });
 
-  return completion.choices[0]?.message?.content || 'sa emoji 🔥';
+  return completion.choices[0]?.message?.content || 'yayın ne zaman başlıyor 🔥';
 }
 
-// Sohbete Mesaj Gönderici
 async function sendChatMessage(youtubeClient, liveChatId, messageText) {
   await youtubeClient.liveChatMessages.insert({
     part: 'snippet',
@@ -85,32 +91,36 @@ async function sendChatMessage(youtubeClient, liveChatId, messageText) {
   });
 }
 
-// Tekil Bot Çalıştırma İşlemi
-async function runBotTask(botClient, persona, botName) {
+async function runBotTask(botClient, systemPrompt, userRolePrompt, botName) {
   try {
     const liveChatId = await getLiveChatId(botClient);
     const recentMsgs = await getRecentChatMessages(botClient, liveChatId);
-    const msg = await generateBotMessage(persona, recentMsgs);
+    const msg = await generateBotMessage(systemPrompt, userRolePrompt, recentMsgs);
     await sendChatMessage(botClient, liveChatId, msg);
     console.log(`[${botName}]: ${msg}`);
   } catch (err) {
-    console.error(`[${botName} Hata]:`, err.message);
+    console.error(`[${botName Hata}]:`, err.message);
   }
 }
 
-// Döngü Başlatıcı
 function startBots() {
-  console.log('Bot servisleri başlatıldı. Sohbet taranıyor...');
+  console.log('Bot servisleri başlatıldı...');
 
-  // Bot 1 (Her 45 saniyede bir dener ve yazar)
-  setInterval(() => {
-    runBotTask(bot1YT, 'Sen heyecanlı ve yayını izleyen sıradan bir izleyicisin.', 'Bot 1 - Viewer');
-  }, 45000);
+  // Bot 1 - Heyecanlı İzleyici Personası (Her 60sn)
+  const bot1System = 'Sen YouTube yayınlarında takılan heyecanlı bir izleyicisin Cezalı çark yayınlarını çok seversin Sakın yayıncı gibi davranma sen sadece bir izleyicisin';
+  const bot1User = 'Yayın ve çark cezaları hakkında heyecanlı kısa bir sohbet mesajı yaz Genel izleyici gibi davran';
 
-  // Bot 2 (Her 60 saniyede bir dener ve yazar)
   setInterval(() => {
-    runBotTask(bot2YT, 'Sen Colette karakterisin, heyecanlı, takıntılı ve enerjik şekilde konuşursun.', 'Bot 2 - Colette');
+    runBotTask(bot1YT, bot1System, bot1User, 'Bot 1 - Viewer');
   }, 60000);
+
+  // Bot 2 - Colette Personası (Her 90sn)
+  const bot2System = 'Sen Brawl Stars oyunundaki Colette karakterisin Çılgın takıntılı enerjik ve koleksiyon meraklısısın Defterinden imza toplamaktan ve Brawl Stars oyunundan bahsetmeyi çok seversin';
+  const bot2User = 'Colette gibi davranarak imzalardan defterinden veya oyundan bahsettiğin haraketli bir mesaj yaz';
+
+  setInterval(() => {
+    runBotTask(bot2YT, bot2System, bot2User, 'Bot 2 - Colette');
+  }, 90000);
 }
 
 app.get('/', (req, res) => res.send('Bots are live and running!'));
