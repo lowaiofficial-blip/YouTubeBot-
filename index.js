@@ -38,35 +38,33 @@ async function checkStreamStatus(youtubeClient) {
   const item = response.data.items?.[0];
   if (!item) throw new Error('Yayın bulunamadı');
 
-  const liveDetails = item.liveStreamingDetails;
-  const isLive = item.snippet.liveBroadcastContent === 'live';
-
   return {
-    isLive: isLive,
-    liveChatId: liveDetails?.activeLiveChatId
+    isLive: item.snippet.liveBroadcastContent === 'live',
+    liveChatId: item.liveStreamingDetails?.activeLiveChatId
   };
 }
 
+// AI Mesaj Üretici (Yayıncı Soru Sorsa Bile Pot Kırmayan Evrensel Replikler)
 async function generateBotMessage(systemPrompt, userRolePrompt) {
   const systemContent = `${systemPrompt} 
 ASLA UYULMASI GEREKEN SERT KURALLAR:
 1. KESİNLİKLE EMOJİ KULLANMA.
 2. KESİNLİKLE NOKTALAMA İŞARETİ KULLANMA.
-3. Bilet imza kızım gibi alakasız kelimeler YASAK.
-4. En fazla 3-5 kelime yaz. Çok kısa ve öz olsun.
-5. Türk genci gibi argo sokak dilli ve rahat yaz (Örn: "çarkı çevir dayı", "yayın başlasın amk", "oha fena ceza").`;
+3. Asla özel oyun adı veya karakter adı verme.
+4. En fazla 3-5 kelime yaz. Çok kısa tut.
+5. Yayıncı soru sorsa bile sırıtmayacak, kararı yayıncıya bırakan veya genel tepki veren sokak ağzıyla argo yaz (Örn: "sen bilirsin dayı", "kendi kafana göre takıl", "fark etmez devam et", "o neydi lan öyle", "yaparsın sen").`;
 
   const completion = await groq.chat.completions.create({
     messages: [
       { role: 'system', content: systemContent },
       { role: 'user', content: userRolePrompt }
     ],
-    model: 'qwen/qwen3.8-27b',
-    temperature: 1.2,
+    model: 'gpt-oss-120b',
+    temperature: 0.7,
     max_tokens: 15,
   });
 
-  return completion.choices[0]?.message?.content || 'yayın başlasın artık';
+  return completion.choices[0]?.message?.content || 'sen bilirsin dayı';
 }
 
 async function sendChatMessage(youtubeClient, liveChatId, messageText) {
@@ -87,16 +85,10 @@ async function runBotTask(botClient, systemPrompt, userRolePrompt, botName, isBo
     const status = await checkStreamStatus(botClient);
     if (!status.liveChatId) return;
 
-    // YAYIN BAZINDA BEKLEME MODU
+    // YAYIN HENÜZ BAŞLAMADIYSA
     if (!status.isLive) {
-      if (isBot1 && bot1PreStreamSent) {
-        console.log(`[${botName}]: Yayın öncesi mesaj atıldı, yayın bekleniyor...`);
-        return;
-      }
-      if (!isBot1 && bot2PreStreamSent) {
-        console.log(`[${botName}]: Yayın öncesi mesaj atıldı, yayın bekleniyor...`);
-        return;
-      }
+      if (isBot1 && bot1PreStreamSent) return;
+      if (!isBot1 && bot2PreStreamSent) return;
 
       const prePrompt = isBot1 
         ? 'Yayın daha başlamadı çok var diye uflayan 3 kelimelik kısa mesaj yaz'
@@ -108,11 +100,11 @@ async function runBotTask(botClient, systemPrompt, userRolePrompt, botName, isBo
       if (isBot1) bot1PreStreamSent = true;
       else bot2PreStreamSent = true;
 
-      console.log(`[${botName} (YAYIN ÖNCESİ)]: ${msg}`);
+      console.log(`[${botName} (YAYIN ÖNCESİ TEK MESAJ)]: ${msg}`);
       return;
     }
 
-    // CANLI YAYIN MODU
+    // YAYIN CANLI BAŞLADIYSA
     const msg = await generateBotMessage(systemPrompt, userRolePrompt);
     await sendChatMessage(botClient, status.liveChatId, msg);
     console.log(`[${botName} CANLI YAYINDA]: ${msg}`);
@@ -123,24 +115,24 @@ async function runBotTask(botClient, systemPrompt, userRolePrompt, botName, isBo
 }
 
 function startBots() {
-  console.log('Botlar yayını pusuya yatıp bekliyor...');
+  console.log('Botlar tek başlarına chati idare edecek şekilde başlatıldı...');
 
   const bot1System = 'Sen YouTube canlı yayın sohbetinde takılan argolu konuşan sabırsız bir Türk gencisin';
-  const bot1User = 'Yayın canlı başladı heyecanlı ve argolu kısa bir şey yaz';
+  const bot1User = 'Yayın canlı başladı, kararı yayıncıya bırakan veya genel tepki veren argolu kısa bir şey yaz';
 
   setInterval(() => {
     runBotTask(bot1YT, bot1System, bot1User, 'Bot 1 - Viewer', true);
   }, 60000);
 
-  const bot2System = 'Sen Brawl Stars Colettesin kafan biraz kırık takıntılısın';
-  const bot2User = 'Yayın canlı başladı çılgın gibi 3 kelimelik mesaj yaz';
+  const bot2System = 'Sen canlı yayını izleyen kafası biraz kırık bir izleyicisin';
+  const bot2User = 'Yayın canlı başladı, kararı yayıncıya bırakan çılgın kısa bir şey yaz';
 
   setInterval(() => {
     runBotTask(bot2YT, bot2System, bot2User, 'Bot 2 - Colette', false);
   }, 90000);
 }
 
-app.get('/', (req, res) => res.send('OK'));
+app.get('/', (req, res) => res.send('Solo stream bots ready!'));
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
   startBots();
