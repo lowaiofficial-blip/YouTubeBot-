@@ -26,7 +26,7 @@ const bot2YT = createYouTubeClient(
   process.env.BOT2_REFRESH_TOKEN
 );
 
-// Canlı Yayın Chat ID Alıcı
+// Canlı Yayın veya Bekleme Ekranı Sohbet ID Alıcı
 async function getLiveChatId(youtubeClient) {
   const response = await youtubeClient.videos.list({
     part: 'liveStreamingDetails',
@@ -35,12 +35,12 @@ async function getLiveChatId(youtubeClient) {
   
   const details = response.data.items?.[0]?.liveStreamingDetails;
   if (!details || !details.activeLiveChatId) {
-    throw new Error('Canlı yayın chat ID bulunamadı. Yayın henüz açık veya chat aktif değil!');
+    throw new Error('Sohbet ID alınamadı. Sohbet henüz aktif değil.');
   }
   return details.activeLiveChatId;
 }
 
-// Canlı Chatteki Son Mesajları Okuma
+// Sohbetteki Son Mesajları Okuma
 async function getRecentChatMessages(youtubeClient, liveChatId) {
   try {
     const res = await youtubeClient.liveChatMessages.list({
@@ -55,7 +55,7 @@ async function getRecentChatMessages(youtubeClient, liveChatId) {
   }
 }
 
-// AI Mesaj Üretici (gpt-oss-20b Modeli)
+// AI Mesaj Üretici (openai/gpt-oss-20b Modeli)
 async function generateBotMessage(personaPrompt, chatContext = '') {
   const systemContent = `${personaPrompt} Kesinlikle noktalama işareti kullanma. Bol emoji kullan. Kısa ve doğal bir YouTube yayın sohbeti mesajı yaz.`;
   const userContent = chatContext ? `Sohbetteki son mesajlar şunlar:\n${chatContext}\nBu mesajlara uygun bir cevap yaz:` : 'Sohbete yeni bir mesaj yaz:';
@@ -65,13 +65,13 @@ async function generateBotMessage(personaPrompt, chatContext = '') {
       { role: 'system', content: systemContent },
       { role: 'user', content: userContent }
     ],
-    model: 'gpt-oss-20b',
+    model: 'openai/gpt-oss-20b',
   });
 
   return completion.choices[0]?.message?.content || 'sa emoji 🔥';
 }
 
-// Canlı Chat'e Mesaj Gönderici
+// Sohbete Mesaj Gönderici
 async function sendChatMessage(youtubeClient, liveChatId, messageText) {
   await youtubeClient.liveChatMessages.insert({
     part: 'snippet',
@@ -85,40 +85,32 @@ async function sendChatMessage(youtubeClient, liveChatId, messageText) {
   });
 }
 
-// Bot Çalıştırıcı
-async function startBots() {
+// Tekil Bot Çalıştırma İşlemi
+async function runBotTask(botClient, persona, botName) {
   try {
-    console.log('Canlı yayın bilgisi alınıyor...');
-    const liveChatId = await getLiveChatId(bot1YT);
-    console.log(`Chat ID Bağlandı: ${liveChatId}`);
-
-    // Bot 1 Canlı Chat Döngüsü (Her 45sn)
-    setInterval(async () => {
-      try {
-        const recentMsgs = await getRecentChatMessages(bot1YT, liveChatId);
-        const msg = await generateBotMessage('Sen heyecanlı ve yayını izleyen sıradan bir izleyicisin.', recentMsgs);
-        await sendChatMessage(bot1YT, liveChatId, msg);
-        console.log(`[Bot 1 - Viewer]: ${msg}`);
-      } catch (err) {
-        console.error('Bot 1 Hata:', err.message);
-      }
-    }, 45000);
-
-    // Bot 2 Canlı Chat Döngüsü (Her 60sn)
-    setInterval(async () => {
-      try {
-        const recentMsgs = await getRecentChatMessages(bot2YT, liveChatId);
-        const msg = await generateBotMessage('Sen Colette karakterisin, heyecanlı, takıntılı ve enerjik şekilde konuşursun.', recentMsgs);
-        await sendChatMessage(bot2YT, liveChatId, msg);
-        console.log(`[Bot 2 - Colette]: ${msg}`);
-      } catch (err) {
-        console.error('Bot 2 Hata:', err.message);
-      }
-    }, 60000);
-
+    const liveChatId = await getLiveChatId(botClient);
+    const recentMsgs = await getRecentChatMessages(botClient, liveChatId);
+    const msg = await generateBotMessage(persona, recentMsgs);
+    await sendChatMessage(botClient, liveChatId, msg);
+    console.log(`[${botName}]: ${msg}`);
   } catch (err) {
-    console.error('Yayın henüz açılmadığı için chat bulunamadı. Yayın açılınca otomatik bağlanacak:', err.message);
+    console.error(`[${botName} Hata]:`, err.message);
   }
+}
+
+// Döngü Başlatıcı
+function startBots() {
+  console.log('Bot servisleri başlatıldı. Sohbet taranıyor...');
+
+  // Bot 1 (Her 45 saniyede bir dener ve yazar)
+  setInterval(() => {
+    runBotTask(bot1YT, 'Sen heyecanlı ve yayını izleyen sıradan bir izleyicisin.', 'Bot 1 - Viewer');
+  }, 45000);
+
+  // Bot 2 (Her 60 saniyede bir dener ve yazar)
+  setInterval(() => {
+    runBotTask(bot2YT, 'Sen Colette karakterisin, heyecanlı, takıntılı ve enerjik şekilde konuşursun.', 'Bot 2 - Colette');
+  }, 60000);
 }
 
 app.get('/', (req, res) => res.send('Bots are live and running!'));
