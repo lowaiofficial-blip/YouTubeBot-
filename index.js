@@ -44,7 +44,7 @@ async function checkStreamStatus(youtubeClient) {
   };
 }
 
-// AI Mesaj Üretici (Yayıncı Soru Sorsa Bile Pot Kırmayan Evrensel Replikler)
+// AI Mesaj Üretici
 async function generateBotMessage(systemPrompt, userRolePrompt) {
   const systemContent = `${systemPrompt} 
 ASLA UYULMASI GEREKEN SERT KURALLAR:
@@ -59,7 +59,7 @@ ASLA UYULMASI GEREKEN SERT KURALLAR:
       { role: 'system', content: systemContent },
       { role: 'user', content: userRolePrompt }
     ],
-    model: 'gpt-oss-120b',
+    model: 'openai/gpt-oss-120b',
     temperature: 0.7,
     max_tokens: 15,
   });
@@ -85,7 +85,7 @@ async function runBotTask(botClient, systemPrompt, userRolePrompt, botName, isBo
     const status = await checkStreamStatus(botClient);
     if (!status.liveChatId) return;
 
-    // YAYIN HENÜZ BAŞLAMADIYSA
+    // YAYIN HENÜZ BAŞLAMADIYSA (Yayın öncesi tek mesaj gönderir)
     if (!status.isLive) {
       if (isBot1 && bot1PreStreamSent) return;
       if (!isBot1 && bot2PreStreamSent) return;
@@ -115,7 +115,7 @@ async function runBotTask(botClient, systemPrompt, userRolePrompt, botName, isBo
 }
 
 function startBots() {
-  console.log('Botlar tek başlarına chati idare edecek şekilde başlatıldı...');
+  console.log('Botlar openai/gpt-oss-120b modeli ile göreve hazır...');
 
   const bot1System = 'Sen YouTube canlı yayın sohbetinde takılan argolu konuşan sabırsız bir Türk gencisin';
   const bot1User = 'Yayın canlı başladı, kararı yayıncıya bırakan veya genel tepki veren argolu kısa bir şey yaz';
@@ -132,7 +132,7 @@ function startBots() {
   }, 90000);
 }
 
-app.get('/', (req, res) => res.send('Solo stream bots ready!'));
+app.get('/', (req, res) => res.send('YouTube Live Chat Bots Running Correctly!'));
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
   startBots();
