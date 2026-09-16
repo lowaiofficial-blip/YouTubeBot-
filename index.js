@@ -8,6 +8,10 @@ const port = process.env.PORT || 3000;
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// Botların yayın öncesi mesaj atıp atmadığını tutan kontrol değişkenleri
+let bot1PreStreamSent = false;
+let bot2PreStreamSent = false;
+
 function createYouTubeClient(clientId, clientSecret, refreshToken) {
   const auth = new google.auth.OAuth2(clientId, clientSecret, 'https://developers.google.com/oauthplayground');
   auth.setCredentials({ refresh_token: refreshToken });
@@ -26,56 +30,46 @@ const bot2YT = createYouTubeClient(
   process.env.BOT2_REFRESH_TOKEN
 );
 
-async function getLiveChatId(youtubeClient) {
+async function checkStreamStatus(youtubeClient) {
   const response = await youtubeClient.videos.list({
-    part: 'liveStreamingDetails',
+    part: 'snippet,liveStreamingDetails',
     id: process.env.LIVE_STREAM_ID
   });
   
-  const details = response.data.items?.[0]?.liveStreamingDetails;
-  if (!details || !details.activeLiveChatId) {
-    throw new Error('Sohbet ID alınamadı.');
-  }
-  return details.activeLiveChatId;
+  const item = response.data.items?.[0];
+  if (!item) throw new Error('Yayın bulunamadı');
+
+  const liveDetails = item.liveStreamingDetails;
+  const isLive = item.snippet.liveBroadcastContent === 'live';
+
+  return {
+    isLive: isLive,
+    liveChatId: liveDetails?.activeLiveChatId
+  };
 }
 
-async function getRecentChatMessages(youtubeClient, liveChatId) {
-  try {
-    const res = await youtubeClient.liveChatMessages.list({
-      liveChatId: liveChatId,
-      part: 'snippet,authorDetails',
-      maxResults: 5
-    });
-    const messages = res.data.items.map(item => `${item.authorDetails.displayName}: ${item.snippet.displayMessage}`);
-    return messages.join('\n');
-  } catch (err) {
-    return '';
-  }
-}
-
-// Tam Ayarlanmış Sistem Prompt'u
-async function generateBotMessage(systemPrompt, userRolePrompt, chatContext = '') {
+// AI Mesaj Üretici (Qwen 3.8 27B Modeli)
+async function generateBotMessage(systemPrompt, userRolePrompt) {
   const systemContent = `${systemPrompt} 
-KESİN KURALLAR:
-1. Kesinlikle noktalama işareti kullanma (nokta, virgül, ünlem YASAK).
-2. Bol bol emoji kullan.
-3. Asla başkasını veya diğer botları @ ile etiketleme!
-4. Başka izleyicilere teşekkür edip yayıncı gibi davranma, sen sadece sohbeti izleyen birisin.
-5. Sohbet geçmişindeki mesajların kelimelerini aynen tekrarlama.`;
-
-  const userContent = chatContext 
-    ? `Sohbetteki son mesajlar şunlar:\n${chatContext}\n\n${userRolePrompt}` 
-    : userRolePrompt;
+ASLA UYULMASI GEREKEN SERT KURALLAR:
+1. KESİNLİKLE EMOJİ KULLANMA.
+2. KESİNLİKLE NOKTALAMA İŞARETİ KULLANMA.
+3. Asla başkasına veya başka bota cevap verme.
+4. Edebi, süslü laflar YASAK.
+5. En fazla 3-5 kelime yaz. Çok kısa tut.
+6. Gerçek Türk genci gibi argolu, rahat ve kısa yaz.`;
 
   const completion = await groq.chat.completions.create({
     messages: [
       { role: 'system', content: systemContent },
-      { role: 'user', content: userContent }
+      { role: 'user', content: userRolePrompt }
     ],
-    model: 'openai/gpt-oss-20b',
+    model: 'qwen/qwen3.8-27b',
+    temperature: 1.2,
+    max_tokens: 15,
   });
 
-  return completion.choices[0]?.message?.content || 'yayın ne zaman başlıyor 🔥';
+  return completion.choices[0]?.message?.content || 'yayın başlasın artık la';
 }
 
 async function sendChatMessage(youtubeClient, liveChatId, messageText) {
@@ -91,39 +85,68 @@ async function sendChatMessage(youtubeClient, liveChatId, messageText) {
   });
 }
 
-async function runBotTask(botClient, systemPrompt, userRolePrompt, botName) {
+async function runBotTask(botClient, systemPrompt, userRolePrompt, botName, isBot1) {
   try {
-    const liveChatId = await getLiveChatId(botClient);
-    const recentMsgs = await getRecentChatMessages(botClient, liveChatId);
-    const msg = await generateBotMessage(systemPrompt, userRolePrompt, recentMsgs);
-    await sendChatMessage(botClient, liveChatId, msg);
-    console.log(`[${botName}]: ${msg}`);
+    const status = await checkStreamStatus(botClient);
+
+    if (!status.liveChatId) return;
+
+    // YAYIN HENÜZ BAŞLAMADIYSA
+    if (!status.isLive) {
+      const alreadySent = isBot1 ? bot1PreStreamSent : bot2PreStreamSent;
+      
+      // Daha önce 1 mesaj atıldıysa sus, tekrar atma!
+      if (alreadySent) {
+        console.log(`[${botName}]: Yayın öncesi tek mesajı zaten atıldı. Bekleniyor...`);
+        return;
+      }
+
+      // Yayın öncesi tek mesajı atıyoruz
+      const prePrompt = isBot1 
+        ? 'Yayın daha başlamadı çok var diye söven veya uflayan 3 kelimelik kısa mesaj yaz'
+        : 'Yayın başlamadı imza alamıyom diye darlayan 3 kelimelik mesaj yaz';
+
+      const msg = await generateBotMessage(systemPrompt, prePrompt);
+      await sendChatMessage(botClient, status.liveChatId, msg);
+      
+      if (isBot1) bot1PreStreamSent = true;
+      else bot2PreStreamSent = true;
+
+      console.log(`[${botName} (YAYIN ÖNCESİ TEK MESAJ)]: ${msg}`);
+      return;
+    }
+
+    // YAYIN BİREBİR BAŞLADIYSA (CANLI)
+    const msg = await generateBotMessage(systemPrompt, userRolePrompt);
+    await sendChatMessage(botClient, status.liveChatId, msg);
+    console.log(`[${botName} CANLI YAYINDA]: ${msg}`);
+
   } catch (err) {
     console.error(`[${botName} Hata]:`, err.message);
   }
 }
 
 function startBots() {
-  console.log('Bot servisleri başlatıldı...');
+  console.log('Bot servisleri Qwen modeli ile başlatıldı...');
 
-  // Bot 1 - Heyecanlı İzleyici Personası (Her 60sn)
-  const bot1System = 'Sen YouTube yayınlarında takılan heyecanlı bir izleyicisin Cezalı çark yayınlarını çok seversin Sakın yayıncı gibi davranma sen sadece bir izleyicisin';
-  const bot1User = 'Yayın ve çark cezaları hakkında heyecanlı kısa bir sohbet mesajı yaz Genel izleyici gibi davran';
+  // Bot 1
+  const bot1System = 'Sen YouTube canlı yayın sohbetinde takılan argolu konuşan sabırsız bir Türk gencisin';
+  const bot1User = 'Yayın canlı başladı heyecanlı ve argolu kısa bir şey yaz';
 
   setInterval(() => {
-    runBotTask(bot1YT, bot1System, bot1User, 'Bot 1 - Viewer');
+    runBotTask(bot1YT, bot1System, bot1User, 'Bot 1 - Viewer', true);
   }, 60000);
 
-  // Bot 2 - Colette Personası (Her 90sn)
-  const bot2System = 'Sen Brawl Stars oyunundaki Colette karakterisin Çılgın takıntılı enerjik ve koleksiyon meraklısısın Defterinden imza toplamaktan ve Brawl Stars oyunundan bahsetmeyi çok seversin';
-  const bot2User = 'Colette gibi davranarak imzalardan defterinden veya oyundan bahsettiğin hareketli bir mesaj yaz';
+  // Bot 2 - Colette
+  const bot2System = 'Sen Brawl Stars Colettesin kafan kırık imza ve brawl stars takıntın var';
+  const bot2User = 'Yayın canlı başladı çılgın gibi imza iste veya brawl stars saçmala';
 
   setInterval(() => {
-    runBotTask(bot2YT, bot2System, bot2User, 'Bot 2 - Colette');
+    runBotTask(bot2YT, bot2System, bot2User, 'Bot 2 - Colette', false);
   }, 90000);
 }
 
-app.get('/', (req, res) => res.send('Bots are live and running!'));
+app.get('/', (req, res) => res.send('Bots are managed with Qwen model!'));
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
   startBots();
