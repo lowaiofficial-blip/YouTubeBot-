@@ -99,7 +99,7 @@ async function runBotTask(botClient, systemPrompt, userRolePrompt, botName) {
     await sendChatMessage(botClient, liveChatId, msg);
     console.log(`[${botName}]: ${msg}`);
   } catch (err) {
-    console.error(`[${botName Hata}]:`, err.message);
+    console.error(`[${botName} Hata]:`, err.message);
   }
 }
 
@@ -116,7 +116,7 @@ function startBots() {
 
   // Bot 2 - Colette Personası (Her 90sn)
   const bot2System = 'Sen Brawl Stars oyunundaki Colette karakterisin Çılgın takıntılı enerjik ve koleksiyon meraklısısın Defterinden imza toplamaktan ve Brawl Stars oyunundan bahsetmeyi çok seversin';
-  const bot2User = 'Colette gibi davranarak imzalardan defterinden veya oyundan bahsettiğin haraketli bir mesaj yaz';
+  const bot2User = 'Colette gibi davranarak imzalardan defterinden veya oyundan bahsettiğin hareketli bir mesaj yaz';
 
   setInterval(() => {
     runBotTask(bot2YT, bot2System, bot2User, 'Bot 2 - Colette');
