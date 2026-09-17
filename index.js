@@ -8,8 +8,13 @@ const port = process.env.PORT || 3000;
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// Yayın öncesi kontrolü
 let bot1PreStreamSent = false;
 let bot2PreStreamSent = false;
+
+// Mesaj hafızası (Tekrarları engellemek için)
+let bot1History = [];
+let bot2History = [];
 
 function createYouTubeClient(clientId, clientSecret, refreshToken) {
   const auth = new google.auth.OAuth2(clientId, clientSecret, 'https://developers.google.com/oauthplayground');
@@ -44,17 +49,31 @@ async function checkStreamStatus(youtubeClient) {
   };
 }
 
-// AI Mesaj Üretici
-async function generateBotMessage(systemPrompt, userRolePrompt) {
+async function getRecentChatHistory(youtubeClient, liveChatId) {
+  try {
+    const response = await youtubeClient.liveChatMessages.list({
+      liveChatId: liveChatId,
+      part: 'snippet',
+      maxResults: 5
+    });
+    return response.data.items.map(i => i.snippet.displayMessage).join(' | ');
+  } catch (err) {
+    return '';
+  }
+}
+
+async function generateBotMessage(systemPrompt, userRolePrompt, historyArray, chatContext = '') {
+  const previousMessages = historyArray.slice(-5).join(', ');
+
   const systemContent = `${systemPrompt} 
-ASLA UYULMASI GEREKEN SERT KURALLAR:
+ASLA UYULMASI GEREKEN KURALLAR:
 1. KESİNLİKLE EMOJİ KULLANMA.
 2. KESİNLİKLE NOKTALAMA İŞARETİ KULLANMA.
-3. ERKEK HİTABI KULLANMA ("dayı", "kanka", "lan", "agalar" gibi kelimeler YASAK).
-4. Yayıncıya bir şey seçtirmeye çalışma ("sen seç", "fark etmez" kelimeleri YASAK).
-5. Asla özel oyun veya karakter adı verme.
-6. En fazla 3-4 kelime yaz. Çok kısa tut.
-7. Sadece oyun akışına uyacak bağımsız genel tepkiler ver (Örn: "of fena gitti", "yavaş ol biraz", "yaparsın sen", "fena patladık", "devam et durma").`;
+3. ERKEK HİTABI KULLANMA ("dayı", "kanka", "lan", "agalar" YASAK).
+4. Sadece kız jargonuyla konuş.
+5. DAHA ÖNCE YAZDIĞIN ŞU MESAJLARI VE BENZERLERİNİ ASLA TEKRARLAMA: [${previousMessages}].
+6. Chatteki son durum: "${chatContext}".
+7. En fazla 3-5 kelime yaz. Kısa ve öz tut.`;
 
   const completion = await groq.chat.completions.create({
     messages: [
@@ -62,11 +81,16 @@ ASLA UYULMASI GEREKEN SERT KURALLAR:
       { role: 'user', content: userRolePrompt }
     ],
     model: 'openai/gpt-oss-120b',
-    temperature: 0.85, // Çeşitlilik artsın diye sıcaklığı biraz yükselttik
+    temperature: 0.85,
     max_tokens: 15,
   });
 
-  return completion.choices[0]?.message?.content || 'of fena gitti';
+  const generated = completion.choices[0]?.message?.content || 'of fena gitti';
+  
+  historyArray.push(generated);
+  if (historyArray.length > 10) historyArray.shift();
+
+  return generated;
 }
 
 async function sendChatMessage(youtubeClient, liveChatId, messageText) {
@@ -87,27 +111,29 @@ async function runBotTask(botClient, systemPrompt, userRolePrompt, botName, isBo
     const status = await checkStreamStatus(botClient);
     if (!status.liveChatId) return;
 
-    // YAYIN HENÜZ BAŞLAMADIYSA
     if (!status.isLive) {
       if (isBot1 && bot1PreStreamSent) return;
       if (!isBot1 && bot2PreStreamSent) return;
 
-      const prePrompt = isBot1 
-        ? 'Yayın başlamadı diye ufoflayan 3 kelimelik kız diliyle kısa mesaj yaz'
-        : 'Yayın başlamadı diye heyecanla darlayan 3 kelimelik çılgınca mesaj yaz';
+      const preStreamMessagesBot1 = ["off yayın açılsa da izlesek", "başlamadı mı daha ya", "bekliyoruz bakalım"];
+      const preStreamMessagesBot2 = ["yayın gelsin artıkk", "heyecandan öleceğim açın", "beklemekten çıldırdım"];
 
-      const msg = await generateBotMessage(systemPrompt, prePrompt);
+      const selectedList = isBot1 ? preStreamMessagesBot1 : preStreamMessagesBot2;
+      const msg = selectedList[Math.floor(Math.random() * selectedList.length)];
+
       await sendChatMessage(botClient, status.liveChatId, msg);
       
       if (isBot1) bot1PreStreamSent = true;
       else bot2PreStreamSent = true;
 
-      console.log(`[${botName} (YAYIN ÖNCESİ TEK MESAJ)]: ${msg}`);
+      console.log(`[${botName} (YAYIN ÖNCESİ)]: ${msg}`);
       return;
     }
 
-    // YAYIN CANLI BAŞLADIYSA
-    const msg = await generateBotMessage(systemPrompt, userRolePrompt);
+    const chatContext = await getRecentChatHistory(botClient, status.liveChatId);
+    const historyArray = isBot1 ? bot1History : bot2History;
+
+    const msg = await generateBotMessage(systemPrompt, userRolePrompt, historyArray, chatContext);
     await sendChatMessage(botClient, status.liveChatId, msg);
     console.log(`[${botName} CANLI YAYINDA]: ${msg}`);
 
@@ -117,26 +143,24 @@ async function runBotTask(botClient, systemPrompt, userRolePrompt, botName, isBo
 }
 
 function startBots() {
-  console.log('Botlar kız jargonu ve ayrıştırılmış kişiliklerle başlatıldı...');
+  console.log('Botlar hafıza koruması ve kız jargonu ile başlatıldı...');
 
-  // BOT 1: Normal Genç Kız İzleyici
-  const bot1System = 'Sen YouTube canlı yayın sohbetinde takılan, rahat konuşan genç bir kız izleyicisin. Erkek ağzı kullanmazsın.';
-  const bot1User = 'Yayın canlı akıyor, yaşanan aksiyona kız diliyle genel 3 kelimelik tepki ver';
+  const bot1System = 'Sen YouTube canlı yayın sohbetinde takılan rahat ve doğal genç bir kız izleyicisin.';
+  const bot1User = 'Chatte yazılanlara ve ortama uyacak şekilde kız diliyle 3-4 kelimelik kısa tepki ver';
 
   setInterval(() => {
-    runBotTask(bot1YT, bot1System, bot1User, 'Bot 1 - GirlViewer', true);
+    runBotTask(bot1YT, bot1System, bot1User, 'Bot 1 - Ece', true);
   }, 60000);
 
-  // BOT 2: Colette Personası (Çılgın & Takıntılı Kız)
-  const bot2System = 'Sen yayıncıyı aşırı seven, takıntılı, coşkulu ve biraz çılgın bir kız izleyicisin (Colette tarzı). Erkek ağzı kullanmazsın.';
-  const bot2User = 'Yayın canlı akıyor, hayranlıkla karışık çılgınca 3 kelimelik genel tepki ver';
+  const bot2System = 'Sen yayıncıyı aşırı seven, heyecanlı ve takıntılı bir kız izleyicisin.';
+  const bot2User = 'Ortama ve chatte konuşulanlara bakarak coşkulu ve çılgınca 3-4 kelimelik kısa tepki ver';
 
   setInterval(() => {
     runBotTask(bot2YT, bot2System, bot2User, 'Bot 2 - Colette', false);
   }, 90000);
 }
 
-app.get('/', (req, res) => res.send('Girl persona bots running!'));
+app.get('/', (req, res) => res.send('Memory-protected Girl Bots Ready!'));
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
   startBots();
